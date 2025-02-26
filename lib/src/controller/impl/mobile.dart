@@ -95,6 +95,20 @@ class WebViewXController extends ChangeNotifier
       );
     }
 
+    if (sourceType == SourceType.html) {
+      await connector.loadHtmlString(
+        HtmlUtils.preprocessSource(
+          value.source,
+          jsContent: const {},
+          encodeHtml: true,
+        ),
+      );
+    } else {
+      await connector.loadRequest(
+        Uri.parse(value.source),
+        headers: headers ?? {},
+      );
+    }
     _notifyWidget();
   }
 
@@ -113,7 +127,6 @@ class WebViewXController extends ChangeNotifier
   /// var resultFromJs = await callJsMethod('someFunction', ['test'])
   /// print(resultFromJs); // prints "This is a test"
   /// ```
-  //TODO This should return an error if the operation failed, but it doesn't
   @override
   Future<dynamic> callJsMethod(
     String name,
@@ -121,7 +134,7 @@ class WebViewXController extends ChangeNotifier
   ) async {
     // This basically will transform a "raw" call (evaluateJavascript)
     // into a little bit more "typed" call, that is - calling a method.
-    final result = await connector.evaluateJavascript(
+    final result = await connector.runJavaScriptReturningResult(
       HtmlUtils.buildJsFunction(name, params),
     );
 
@@ -129,39 +142,31 @@ class WebViewXController extends ChangeNotifier
     //
     // In the mobile version responses from Js to Dart come wrapped in single quotes (')
     // The web works fine because it is already into it's native environment
-    return HtmlUtils.unQuoteJsResponseIfNeeded(result);
+    return result is String
+        ? HtmlUtils.unQuoteJsResponseIfNeeded(result)
+        : result;
   }
 
-  /// This function allows you to evaluate 'raw' javascript (e.g: 2+2)
-  /// If you need to call a function you should use the method above ([callJsMethod])
-  ///
-  /// The [inGlobalContext] param should be set to true if you wish to eval your code
-  /// in the 'window' context, instead of doing it inside the corresponding iframe's 'window'
-  ///
-  /// For more info, check Mozilla documentation on 'window'
+  /// Evaluates the given JavaScript [code] in the context of the current page.
   @override
   Future<dynamic> evalRawJavascript(
-    String rawJavascript, {
-    bool inGlobalContext = false, // NO-OP HERE
-  }) {
-    return connector.evaluateJavascript(rawJavascript);
+    String code, {
+    bool inGlobalContext = false,
+  }) async {
+    try {
+      final result = await connector.runJavaScriptReturningResult(code);
+      return result is String
+          ? HtmlUtils.unQuoteJsResponseIfNeeded(result)
+          : result;
+    } catch (e) {
+      return null;
+    }
   }
 
-  /// Returns the current content
+  /// Gets the current content
   @override
   Future<WebViewContent> getContent() async {
-    var currentContent = await connector.currentUrl();
-    var currentSourceType = value.sourceType;
-
-    if (currentContent!.substring(0, 5) == 'data:') {
-      currentContent = HtmlUtils.dataUriToHtml(currentContent);
-      currentSourceType = SourceType.html;
-    }
-
-    return value.copyWith(
-      source: currentContent,
-      sourceType: currentSourceType,
-    );
+    return value;
   }
 
   /// Returns a Future that completes with the value true, if you can go
@@ -171,15 +176,6 @@ class WebViewXController extends ChangeNotifier
     return connector.canGoBack();
   }
 
-  /// Go back in the history stack.
-  @override
-  Future<void> goBack() async {
-    if (await canGoBack()) {
-      await connector.goBack();
-      value = await getContent();
-    }
-  }
-
   /// Returns a Future that completes with the value true, if you can go
   /// forward in the history stack.
   @override
@@ -187,56 +183,94 @@ class WebViewXController extends ChangeNotifier
     return connector.canGoForward();
   }
 
-  /// Go forward in the history stack.
+  /// Gets the height of the HTML content.
   @override
-  Future<void> goForward() async {
-    if (await canGoForward()) {
-      await connector.goForward();
-      final liveContent = await connector.currentUrl();
-      value = value.copyWith(source: liveContent);
+  Future<double?> getScrollHeight() async {
+    final result = await evalRawJavascript(
+      'document.documentElement.scrollHeight;',
+    );
+    if (result == null) return null;
+    if (result is num) return result.toDouble();
+    return double.tryParse(result.toString());
+  }
+
+  /// Gets the width of the HTML content.
+  @override
+  Future<double?> getScrollWidth() async {
+    final result = await evalRawJavascript(
+      'document.documentElement.scrollWidth;',
+    );
+    if (result == null) return null;
+    if (result is num) return result.toDouble();
+    return double.tryParse(result.toString());
+  }
+
+  /// Reloads the current content.
+  @override
+  Future<void> reload() async {
+    await connector.reload();
+  }
+
+  /// Goes back in history.
+  @override
+  Future<void> goBack() async {
+    if (await connector.canGoBack()) {
+      await connector.goBack();
     }
   }
 
-  /// Reload the current content.
+  /// Goes forward in history.
   @override
-  Future<void> reload() {
-    return connector.reload();
+  Future<void> goForward() async {
+    if (await connector.canGoForward()) {
+      await connector.goForward();
+    }
   }
 
   /// Get scroll position on X axis
   @override
-  Future<int> getScrollX() {
-    return connector.getScrollX();
+  Future<int> getScrollX() async {
+    final result = await evalRawJavascript('window.scrollX');
+    if (result is num) return result.toInt();
+    return 0;
   }
 
   /// Get scroll position on Y axis
   @override
-  Future<int> getScrollY() {
-    return connector.getScrollY();
+  Future<int> getScrollY() async {
+    final result = await evalRawJavascript('window.scrollY');
+    if (result is num) return result.toInt();
+    return 0;
   }
 
   /// Scrolls by `x` on X axis and by `y` on Y axis
   @override
   Future<void> scrollBy(int x, int y) {
-    return connector.scrollBy(x, y);
+    return connector.runJavaScript(
+      'window.scrollBy($x, $y)',
+    );
   }
 
   /// Scrolls exactly to the position `(x, y)`
   @override
   Future<void> scrollTo(int x, int y) {
-    return connector.scrollTo(x, y);
+    return connector.runJavaScript(
+      'window.scrollTo($x, $y)',
+    );
   }
 
   /// Retrieves the inner page title
   @override
-  Future<String?> getTitle() {
-    return connector.getTitle();
+  Future<String?> getTitle() async {
+    final result = await evalRawJavascript('document.title');
+    return result?.toString();
   }
 
   /// Clears cache
   @override
-  Future<void> clearCache() {
-    return connector.clearCache();
+  Future<void> clearCache() async {
+    await connector.clearCache();
+    await connector.clearLocalStorage();
   }
 
   /// INTERNAL

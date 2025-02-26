@@ -73,6 +73,10 @@ abstract class WebViewXController<T> {
   /// in the 'window' context, instead of doing it inside the corresponding iframe's 'window'
   ///
   /// For more info, check Mozilla documentation on 'window'
+  ///
+  /// Returns the raw result from JavaScript evaluation. The type depends on the platform:
+  /// - On mobile (webview_flutter), it returns an Object that can be String, num, bool, List, or Map
+  /// - On web, it returns the raw JavaScript result
   Future<dynamic> evalRawJavascript(
     String rawJavascript, {
     bool inGlobalContext = false,
